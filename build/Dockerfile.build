@@ -1,0 +1,47 @@
+# Copyright (c) 2026 Hygon Information Technology Co., Ltd.
+# SPDX-License-Identifier: Apache-2.0
+#
+# 离线构建镜像：内置 Go 工具链 + C 编译工具链。
+# 用于在没有网络的 DCU 机器上离线编译 hcu-dcgm 二进制。
+#
+# 说明：
+#  - 基础镜像选择 ubuntu:20.04，与 deployment/Dockerfile 的运行时保持一致，
+#    保证编译产物链接的 glibc 版本较低，可运行在 20.04 及更新系统上。
+#  - 镜像只包含工具链，不包含源码和 HCU 驱动动态库（.so）。
+#    源码与 vendor 在离线机器上以挂载方式传入；
+#    驱动动态库从 DCU 主机 /opt/hyhal 挂载（链接期需要 librocm_smi64.so / libhydmi.so）。
+#  - 已关闭网络：GOPROXY=off、GOFLAGS=-mod=vendor、GOTOOLCHAIN=local。
+
+FROM ubuntu:20.04
+
+ARG GO_VERSION=1.22.8
+ARG GO_ARCH=amd64
+
+# 编译所需的基础工具链（cgo 依赖 gcc / libc6-dev）。
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        gcc \
+        g++ \
+        libc6-dev \
+        make \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 Go 工具链。
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" \
+    | tar -C /usr/local -xz
+
+ENV PATH=/usr/local/go/bin:/go/bin:$PATH \
+    GOPATH=/go \
+    GO111MODULE=on \
+    CGO_ENABLED=1 \
+    GOTOOLCHAIN=local \
+    GOFLAGS=-mod=vendor \
+    GOPROXY=off \
+    GOSUMDB=off
+
+# 源码（含 vendor）在离线机器上挂载到 /src。
+# 镜像只提供工具链环境，编译命令由调用方传入（见 build-offline.sh），
+# 因此这里不预设默认 CMD，避免直接 docker run 时因未挂载源码而误报失败。
+WORKDIR /src
